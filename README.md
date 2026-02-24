@@ -25,4 +25,4 @@ It integrates:
 
 ## Architecture
 
-(여기에 다이어그램 추가 예정)
+(To be added here)
