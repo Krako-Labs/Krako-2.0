@@ -20,6 +20,7 @@ def _ledger_row(**kwargs) -> dict:
         "work_unit_id": "sess:s1:wu-1",
         "tenant_id": "tenant-a",
         "correlation_id": "sess:s1",
+        "execution_session_id": "s1",
         "cpu_seconds": "1.000000",
         "llm_tokens": 0,
         "cpu_unit_price_usd": "1.000000",

@@ -14,6 +14,7 @@ class WorkUnit(BaseModel):
     region: str | None = None
     required_concurrency: int = 1
     min_runtime_version: str | None = None
+    execution_session_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

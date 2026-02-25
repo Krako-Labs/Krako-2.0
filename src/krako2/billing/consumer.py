@@ -70,6 +70,7 @@ class BillingConsumer:
             "work_unit_id": event.work_unit_id,
             "tenant_id": tenant_id,
             "correlation_id": correlation_id,
+            "execution_session_id": payload.get("execution_session_id"),
             "cpu_seconds": serialize_decimal(cpu_seconds),
             "llm_tokens": llm_tokens,
             "cpu_unit_price_usd": serialize_decimal(self.cpu_unit_price),

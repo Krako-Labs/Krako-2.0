@@ -90,6 +90,7 @@ def test_schema_fields_present(tmp_path: Path) -> None:
         "work_unit_id",
         "tenant_id",
         "correlation_id",
+        "execution_session_id",
         "cpu_seconds",
         "llm_tokens",
         "cpu_unit_price_usd",

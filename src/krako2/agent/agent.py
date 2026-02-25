@@ -107,6 +107,7 @@ class NodeAgent:
             "llm_tokens": int(payload.get("llm_tokens", 0)),
             "selected_node_id": self.node_id,
             "attempt_index": int(payload.get("attempt_index", 1)),
+            "execution_session_id": payload.get("execution_session_id"),
         }
         _, created = self.publisher.emit(
             EventType.WORKUNIT_COMPLETED,
@@ -124,6 +125,7 @@ class NodeAgent:
             "correlation_id": str(payload.get("correlation_id", f"sess:{work_unit_id}")),
             "selected_node_id": self.node_id,
             "attempt_index": int(payload.get("attempt_index", 1)),
+            "execution_session_id": payload.get("execution_session_id"),
             "error_code": "agent_stub_error",
             "error_reason": reason,
         }

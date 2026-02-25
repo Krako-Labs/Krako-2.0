@@ -268,6 +268,8 @@ class SchedulerService:
             "reason_code": debug["reason_code"],
             "scheduling_epoch": epoch,
         }
+        if work_unit.execution_session_id is not None:
+            payload["execution_session_id"] = work_unit.execution_session_id
 
         event, created = publisher.emit(
             EventType.WORKUNIT_SCHEDULED,

@@ -15,6 +15,7 @@ _REQUIRED_LEDGER_FIELDS = {
     "work_unit_id",
     "tenant_id",
     "correlation_id",
+    "execution_session_id",
     "cpu_seconds",
     "llm_tokens",
     "cpu_unit_price_usd",
@@ -131,10 +132,13 @@ def check_billing_anomalies(event_log_path: Path, ledger_path: Path) -> dict[str
 
                 ledger_total += total
 
+                exec_sess = row.get("execution_session_id")
                 corr = row.get("correlation_id")
                 wu = row.get("work_unit_id")
                 mapped_session: str | None = None
-                if isinstance(corr, str) and corr.startswith("sess:"):
+                if isinstance(exec_sess, str) and exec_sess:
+                    mapped_session = exec_sess
+                elif isinstance(corr, str) and corr.startswith("sess:"):
                     mapped_session = corr[len("sess:") :]
                 elif isinstance(wu, str) and wu.startswith("sess:"):
                     mapped_session = wu[len("sess:") :]

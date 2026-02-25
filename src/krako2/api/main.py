@@ -27,6 +27,7 @@ class SubmitWorkUnitRequest(BaseModel):
     region: str | None = None
     required_concurrency: int = 1
     min_runtime_version: str | None = None
+    execution_session_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -42,6 +43,7 @@ def submit_workunit(request: SubmitWorkUnitRequest) -> dict[str, object]:
         region=request.region,
         required_concurrency=request.required_concurrency,
         min_runtime_version=request.min_runtime_version,
+        execution_session_id=request.execution_session_id,
         payload=request.payload,
     )
 
@@ -64,6 +66,7 @@ def submit_work_unit(work_unit: WorkUnit) -> dict[str, object]:
             "kind": work_unit.kind,
             "region": work_unit.region,
             "required_concurrency": work_unit.required_concurrency,
+            "execution_session_id": work_unit.execution_session_id,
             **work_unit.payload,
         },
     )

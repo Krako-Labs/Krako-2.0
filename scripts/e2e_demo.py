@@ -87,13 +87,15 @@ def _seed_node_registry(data_dir: Path, node_id: str, region: str) -> None:
         registry_path.write_text(json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _has_demo_completion(event_log: EventLog, work_unit_id: str, node_id: str) -> bool:
+def _has_demo_completion(event_log: EventLog, work_unit_id: str, node_id: str, execution_session_id: str) -> bool:
     for event in event_log.read_events():
         if event.type.value != "workunit.completed":
             continue
         if event.work_unit_id != work_unit_id:
             continue
         payload = event.payload or {}
+        if payload.get("execution_session_id") not in {execution_session_id, None}:
+            continue
         if payload.get("selected_node_id") == node_id:
             return True
     return False
@@ -119,12 +121,14 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
 
     work_unit = WorkUnit(
         id="demo-1-workunit",
+        execution_session_id="demo-1",
         kind=args.kind,
         region=args.region,
         required_concurrency=1,
         payload={
             "tenant_id": args.tenant_id,
             "correlation_id": "sess:demo-1",
+            "execution_session_id": "demo-1",
             "simulated_ms": args.simulated_ms,
             "llm_tokens": args.llm_tokens,
             "attempt_index": 1,
@@ -132,7 +136,7 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     nodes = NodeRegistry(registry_path=data_dir / "node_registry.json").list_nodes()
-    if _has_demo_completion(event_log, work_unit.id, args.node_id):
+    if _has_demo_completion(event_log, work_unit.id, args.node_id, "demo-1"):
         scheduled = {
             "selected_node_id": args.node_id,
             "dispatch_event_id": None,
