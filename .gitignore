@@ -7,6 +7,7 @@
 # Local runtime data
 /data/*.jsonl
 /data/trust_state.json
+/data/billing_dedupe.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
