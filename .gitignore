@@ -4,6 +4,10 @@
 .AppleDouble
 .LSOverride
 
+# Local runtime data
+/data/*.jsonl
+/data/trust_state.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

@@ -53,6 +53,28 @@ As implementation modules are added, component-specific setup instructions shoul
 
 ---
 
+## Dev: run + replay
+
+Minimal local runtime commands:
+
+```bash
+pip install -e .
+make run
+```
+
+In a separate terminal, replay append-only events through billing and trust consumers:
+
+```bash
+make replay
+```
+
+This writes local runtime data under `./data` only:
+- `events.jsonl`
+- `billing_ledger.jsonl`
+- `trust_state.json`
+
+---
+
 ## Contributing
 
 Contributions are welcome. To contribute:
