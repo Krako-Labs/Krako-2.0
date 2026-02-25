@@ -4,6 +4,7 @@ import json
 import os
 import time
 from decimal import Decimal
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,23 @@ class NodeAgent:
         state["processed_event_ids"] = ids
         self._atomic_write_state(state)
 
+    def emit_heartbeat(self) -> bool:
+        epoch_ms = int(time.time() * 1000)
+        payload = {
+            "node_id": self.node_id,
+            "health_status": "healthy",
+            "active_queue_depth": 0,
+            "utilization": 0.2,
+            "trust_score_hint": 0.5,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        _, created = self.publisher.emit(
+            EventType.NODE_HEALTH_UPDATED,
+            idempotency_key=f"heartbeat:{self.node_id}:{epoch_ms}",
+            payload=payload,
+        )
+        return created
+
     def _emit_completed(self, dispatch_event: dict[str, Any], payload: dict[str, Any]) -> bool:
         work_unit_id = dispatch_event.get("work_unit_id")
         dispatch_event_id = dispatch_event.get("id")
@@ -138,6 +156,7 @@ class NodeAgent:
         return created
 
     def poll_once(self) -> dict[str, int]:
+        self.emit_heartbeat()
         rows = self._tail_new_events()
         processed = 0
         skipped = 0

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,7 @@ class SchedulerService:
         state_path: str | Path = "data/scheduler_state.json",
         retry_budget_state_path: str | Path = "data/retry_budget_state.json",
         congestion_state_path: str | Path = "data/congestion_state.json",
+        trust_state_path: str | Path = "data/trust_state.json",
         publisher: EventPublisher | None = None,
         circuit_breaker: CircuitBreakerManager | None = None,
     ) -> None:
@@ -60,6 +62,7 @@ class SchedulerService:
 
         self.publisher = publisher
         self.circuit_breaker = circuit_breaker or CircuitBreakerManager()
+        self.trust_state_path = Path(trust_state_path)
 
     def _read_state(self) -> dict[str, Any]:
         with self.state_path.open("r", encoding="utf-8") as f:
@@ -115,11 +118,35 @@ class SchedulerService:
         self._atomic_write(state)
         return new_streak
 
+    def _trust_score_for_node(self, node_id: str) -> tuple[float, bool]:
+        # Returns (trust_score, is_fresh).
+        if not self.trust_state_path.exists():
+            return 0.5, False
+        try:
+            with self.trust_state_path.open("r", encoding="utf-8") as f:
+                state = json.load(f)
+            nodes = state.get("nodes", {})
+            entry = nodes.get(node_id, {})
+            score = _clamp(float(entry.get("score", 0.5)), 0.0, 1.0)
+
+            ts_raw = entry.get("last_seen_ts")
+            if not isinstance(ts_raw, str):
+                return score, False
+            ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            age_seconds = (now - ts.astimezone(timezone.utc)).total_seconds()
+            return score, age_seconds <= 60
+        except Exception:
+            return 0.5, False
+
     def _node_score(self, node: Node, work_unit: WorkUnit) -> tuple[float, dict[str, float]]:
         denominator = max(1, node.available_concurrency + node.active_queue_depth)
         c = min(1.0, node.available_concurrency / denominator)
         l = _clamp(1.0 - float(node.utilization), 0.0, 1.0)
-        t = _clamp(float(node.trust_score), 0.0, 1.0)
+        trust_score, is_fresh = self._trust_score_for_node(node.node_id)
+        t = trust_score if trust_score is not None else _clamp(float(node.trust_score), 0.0, 1.0)
+        if not is_fresh:
+            t = t * 0.5
 
         if work_unit.region is None:
             r = 0.5

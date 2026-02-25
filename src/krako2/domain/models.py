@@ -20,6 +20,7 @@ class WorkUnit(BaseModel):
 
 
 class EventType(str, Enum):
+    NODE_HEALTH_UPDATED = "node.health.updated"
     WORKUNIT_SUBMITTED = "workunit.submitted"
     WORKUNIT_SCHEDULED = "workunit.scheduled"
     WORKUNIT_COMPLETED = "workunit.completed"

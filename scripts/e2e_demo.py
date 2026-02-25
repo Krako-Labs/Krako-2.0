@@ -116,8 +116,27 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
         state_path=data_dir / "scheduler_state.json",
         retry_budget_state_path=data_dir / "retry_budget_state.json",
         congestion_state_path=data_dir / "congestion_state.json",
+        trust_state_path=data_dir / "trust_state.json",
         publisher=publisher,
     )
+    trust = TrustConsumer(data_dir / "trust_state.json")
+    seen_event_ids: set[str] = set()
+
+    def consume_new_events_for_trust() -> int:
+        updates = 0
+        for event in event_log.read_events():
+            if event.id in seen_event_ids:
+                continue
+            seen_event_ids.add(event.id)
+            if trust.consume(event):
+                updates += 1
+        return updates
+
+    agent = NodeAgent(node_id=args.node_id, data_dir=data_dir)
+    trust_updates = 0
+    # Ensure heartbeat exists before scheduling so trust can influence scheduling score.
+    agent.emit_heartbeat()
+    trust_updates += consume_new_events_for_trust()
 
     work_unit = WorkUnit(
         id="demo-1-workunit",
@@ -150,27 +169,22 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
             "status": "scheduled" if selected_node_id else "not_scheduled",
         }
 
-    agent = NodeAgent(node_id=args.node_id, data_dir=data_dir)
     agent_stats = {"processed": 0, "skipped": 0}
     for _ in range(max(1, int(args.polls))):
         out = agent.poll_once()
         agent_stats["processed"] += out["processed"]
         agent_stats["skipped"] += out["skipped"]
+        trust_updates += consume_new_events_for_trust()
 
     # Replay billing + trust over append-only events.
     billing = BillingConsumer(
         ledger_path=data_dir / "billing_ledger.jsonl",
         dedupe_path=data_dir / "billing_dedupe.json",
     )
-    trust = TrustConsumer(data_dir / "trust_state.json")
-
     billed = 0
-    trust_updates = 0
     for event in event_log.read_events():
         if billing.consume(event):
             billed += 1
-        if trust.consume(event):
-            trust_updates += 1
 
     wallet = compute_wallet_snapshot(
         ledger_path=data_dir / "billing_ledger.jsonl",

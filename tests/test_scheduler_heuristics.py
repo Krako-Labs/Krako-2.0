@@ -13,6 +13,7 @@ def _service(tmp_path: Path) -> SchedulerService:
         state_path=tmp_path / "scheduler_state.json",
         retry_budget_state_path=tmp_path / "retry_budget_state.json",
         congestion_state_path=tmp_path / "congestion_state.json",
+        trust_state_path=tmp_path / "trust_state.json",
     )
 
 
@@ -95,6 +96,7 @@ def test_soft_anti_affinity_switches_when_within_threshold(tmp_path: Path) -> No
         state_path=state_path,
         retry_budget_state_path=tmp_path / "retry_budget_state.json",
         congestion_state_path=tmp_path / "congestion_state.json",
+        trust_state_path=tmp_path / "trust_state.json",
     )
     work_unit = WorkUnit(kind="cpu", required_concurrency=1)
     nodes = [
