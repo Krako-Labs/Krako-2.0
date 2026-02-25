@@ -1,117 +1,240 @@
-<p align="center">
-  <img src="assets/krako-logo-main.png" width="240">
-</p>
+![Krako Logo](assets/Krako_Logo_Main_2.0.png)
 
 # Krako 2.0
+**Deterministic Distributed Execution Fabric for AI Workloads**
 
-> Energy-efficient, triadic multi-tier inference infrastructure enabling adaptive routing across heterogeneous edge-cloud nodes.
-
-![Build](https://img.shields.io/badge/build-dev-orange)
-![License](https://img.shields.io/badge/license-Apache--2.0-blue)
-![Status](https://img.shields.io/badge/status-active--development-green)
-![Architecture](https://img.shields.io/badge/architecture-triadic-purple)
-
----
-
-## Overview
-
-Krako 2.0 is a hybrid AI infrastructure project for running inference workloads across edge and cloud environments with adaptive routing, energy-aware execution, and heterogeneous hardware support.
-
-Core focus areas:
-
-- CHUNK-based orchestration
-- Triadic adaptive inference (SM + SMem + LLM fallback)
-- Heterogeneous runtime support (CPU, GPU, NPU, Edge)
-- Hybrid backbone + community execution
-- Real-time telemetry and energy-aware routing
+![build](https://img.shields.io/badge/build-dev-orange)
+![license](https://img.shields.io/badge/license-Apache--2.0-blue)
+![status](https://img.shields.io/badge/status-active--development-brightgreen)
+![architecture](https://img.shields.io/badge/architecture-event--sourced-purple)
+![execution](https://img.shields.io/badge/execution-deterministic-black)
+![llm](https://img.shields.io/badge/llm-token--metered-teal)
 
 ---
 
-## Installation
+# Overview
 
-Krako 2.0 is currently in active development. To install the project locally:
+Krako 2.0 is an event‑sourced distributed execution framework designed specifically for AI workloads.
 
-1. Clone the repository:
+It provides:
 
-```bash
-git clone git@github.com:Krako-Labs/Krako-2.0.git
-```
+• Deterministic multi‑agent execution  
+• Replay‑safe billing (CPU + LLM tokens)  
+• Claim‑based contention safety  
+• Trust & heartbeat‑driven scheduling  
+• Admission control (OPEN / THROTTLED / CRITICAL)  
+• Logical autoscaling controller  
+• Split line‑item billing architecture  
 
-2. Enter the project directory:
-
-```bash
-cd Krako-2.0
-```
-
-3. Pull the latest changes before starting work:
-
-```bash
-git pull origin main
-```
-
-As implementation modules are added, component-specific setup instructions should be documented in their respective directories.
+All built on an append‑only event backbone.
 
 ---
 
-## Dev: run + replay
+# 🧠 Core Philosophy
 
-Minimal local runtime commands:
+Krako 2.0 is not a simple task runner.
 
-```bash
-pip install -e .
-make run
-```
+It is a deterministic execution fabric where:
 
-In a separate terminal, replay append-only events through billing and trust consumers:
+• Every action is an event  
+• Every cost is replayable  
+• Every claim is deterministic  
+• Every scale decision is traceable  
+• Every ledger entry is idempotent  
 
-```bash
-make replay
-```
+System invariants:
 
-This writes local runtime data under `./data` only:
-- `events.jsonl`
-- `billing_ledger.jsonl`
-- `trust_state.json`
+• No double execution  
+• No double billing  
+• Replay produces identical financial state  
+• Multi‑agent contention is safe  
 
 ---
 
-## Dev: Agent
+# 🏗 System Architecture
 
-Run a minimal node agent loop for a registered node:
-
-```bash
-NODE_ID=node-1 python3 -m krako2.agent.runner
+```mermaid
+flowchart LR
+    A[Submit WorkUnit] --> B[Scheduler]
+    B -->|workunit.scheduled| C[Event Log]
+    C --> D[Node Agent]
+    D -->|workunit.claimed| C
+    D -->|llm.invocation.completed| C
+    D -->|workunit.completed| C
+    C --> E[Billing Consumer]
+    C --> F[Trust Consumer]
+    C --> G[Autoscaling Controller]
+    E --> H[Ledger JSONL]
+    H --> I[Wallet Snapshot]
+    C --> J[Anomaly Checker]
+    F --> K[Trust State]
+    G --> L[Capacity State]
 ```
 
 ---
 
-## Dev: E2E Demo
+# 🔄 Execution Lifecycle
 
-Run the deterministic end-to-end demo pipeline:
+## 1️⃣ WorkUnit Submission
 
-```bash
-python3 scripts/e2e_demo.py --reset --polls 2
-python3 scripts/e2e_demo.py --data-dir data --polls 2
-python3 scripts/e2e_demo.py --reset --kind llm_pod --llm-tokens 1200 --polls 2
+A WorkUnit includes:
+
+• kind (`cpu` | `llm_pod`)  
+• execution_session_id  
+• priority (p0, p1, p2…)  
+• region  
+• payload (prompt, tokens, etc.)  
+
+Scheduler performs:
+
+• Hard filter (supported_kinds, health, concurrency)  
+• Weighted scoring (capacity, load, trust, region)  
+• Anti‑affinity streak control  
+• Admission enforcement (capacity mode)  
+
+---
+
+## 2️⃣ Multi‑Agent Contention Safety
+
+Agents tail the same event log.
+
+Before execution, each agent attempts to claim the work unit.
+
+```mermaid
+sequenceDiagram
+    participant A1 as Agent A
+    participant A2 as Agent B
+    participant Log as Event Log
+
+    A1->>Log: workunit.claimed
+    A2->>Log: sees claimed
+    A2->>A2: skip execution
+    A1->>Log: workunit.completed
 ```
 
 ---
 
-## Contributing
+# 🤖 LLM Pod Execution
 
-Contributions are welcome. To contribute:
+For `kind="llm_pod"`:
 
-1. Fork the repository and create a feature branch:
+• Agent invokes LLM client (stub or OpenAI)  
+• Emits:
+  - `llm.invocation.completed`
+  - `workunit.completed`
 
-```bash
-git checkout -b feature/your-change
+LLM provider selection:
+
+```
+KRAKO_LLM_PROVIDER=stub | openai
 ```
 
-2. Make focused changes and commit with clear messages.
-3. Push your branch to your fork.
-4. Open a pull request against `main` with:
-   - A short summary of the change
-   - Why the change is needed
-   - Any testing notes or validation steps
+Invocation telemetry includes:
 
-Please keep pull requests small and scoped so they can be reviewed quickly.
+• tokens_in  
+• tokens_out  
+• total_tokens  
+• latency_ms  
+• provider  
+• estimated_cost_usd  
+
+---
+
+# 💰 Deterministic Split Billing
+
+Two billing line item types:
+
+| line_item_type | Source Event                  |
+|----------------|------------------------------|
+| workunit_cpu  | workunit.completed           |
+| llm_tokens    | llm.invocation.completed     |
+
+Double charge prevention:
+
+```
+KRAKO_BILL_LLM_FROM_WORKUNIT_COMPLETED=0
+KRAKO_BILL_LLM_FROM_INVOCATION=1
+```
+
+Ledger guarantees:
+
+• Append‑only  
+• Decimal precision (6dp)  
+• Event‑id idempotent  
+• Replay‑safe  
+
+---
+
+# 📈 Autoscaling & Admission
+
+Capacity modes:
+
+• OPEN  
+• THROTTLED  
+• CRITICAL  
+
+```mermaid
+flowchart TD
+    M[Live Registry Metrics] --> A[Autoscaling Controller]
+    A -->|capacity.scale.requested| C[Event Log]
+    A -->|capacity.admission.mode.changed| C
+    C --> S[Scheduler Enforcement]
+```
+
+---
+
+# 🧪 E2E Demo
+
+CPU burst example:
+
+```
+python scripts/e2e_demo.py --reset --burst 3 --polls 6
+```
+
+LLM stub example:
+
+```
+python scripts/e2e_demo.py --reset --kind llm_pod --polls 2 --llm-provider stub
+```
+
+Multi‑agent example:
+
+```
+python scripts/e2e_demo.py --reset --burst 1 --polls 2 --multi-agent
+```
+
+Autoscaling auto mode:
+
+```
+python scripts/e2e_demo.py --reset --simulate-pressure auto --burst 3 --polls 6
+```
+
+---
+
+# 📂 Project Structure
+
+```
+src/krako2/
+  agent/           # Execution loop + claim logic
+  autoscaling/     # Capacity controller
+  billing/         # Ledger + anomaly
+  llm/             # LLM client abstraction
+  scheduler/       # Placement + admission
+  trust/           # Trust model
+  storage/         # Event log backbone
+scripts/
+  e2e_demo.py
+```
+
+---
+
+# 🚀 Status
+
+Krako 2.0 is an actively developed distributed execution prototype designed to evolve into production‑grade AI infrastructure.
+
+---
+
+# 📜 License
+
+Apache 2.0
+
