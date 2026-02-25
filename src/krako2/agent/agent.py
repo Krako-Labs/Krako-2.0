@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from krako2.agent.claim_index import is_claimed, record_claim, rebuild_from_event_log
-from krako2.billing.money import quant6, serialize_decimal
+from krako2.billing.money import dec, quant6, serialize_decimal
 from krako2.domain.models import EventType
-from krako2.llm.client import LLMClient, build_llm_client
+from krako2.llm.client import LLMClient, get_client
 from krako2.storage.event_log import EventLog
 from krako2.telemetry.publisher import EventPublisher
 
@@ -47,12 +47,13 @@ class NodeAgent:
 
         self.publisher = publisher or EventPublisher(EventLog(self.event_log_path))
         if llm_client is None:
-            client, provider = build_llm_client()
+            client, provider = get_client()
             self.llm_client = client
             self.llm_provider = llm_provider or provider
         else:
             self.llm_client = llm_client
             self.llm_provider = llm_provider or "custom"
+        self.llm_unit_price_per_1k = dec(os.getenv("KRAKO_LLM_USD_PER_1K_TOKENS", "0.002000"))
 
         default_state = {
             "last_offset_bytes": 0,
@@ -276,6 +277,7 @@ class NodeAgent:
         tokens_out = int(result.get("tokens_out", 0))
         total_tokens = int(result.get("total_tokens", tokens_in + tokens_out))
         latency_ms = int(result.get("latency_ms", 0))
+        estimated_cost = quant6((dec(total_tokens) / dec("1000")) * self.llm_unit_price_per_1k)
         llm_payload = {
             "execution_session_id": payload.get("execution_session_id"),
             "work_unit_id": work_unit_id,
@@ -288,6 +290,7 @@ class NodeAgent:
             "total_tokens": total_tokens,
             "latency_ms": latency_ms,
             "provider": self.llm_provider,
+            "estimated_cost_usd": serialize_decimal(estimated_cost),
         }
         self.publisher.emit(
             EventType.LLM_INVOCATION_COMPLETED,

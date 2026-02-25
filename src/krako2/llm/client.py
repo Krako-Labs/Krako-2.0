@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 from typing import Any, Protocol
 
@@ -50,9 +51,25 @@ class OpenAILLMClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read()
-        data = json.loads(raw.decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read()
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="ignore")
+            except Exception:
+                body = ""
+            raise RuntimeError(f"openai_http_error status={exc.code} body={body[:200]}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"openai_network_error reason={exc.reason}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"openai_invoke_error {exc}") from exc
+
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("openai_invalid_json_response") from exc
         usage = data.get("usage", {}) if isinstance(data, dict) else {}
 
         tokens_in = int(usage.get("input_tokens", 0) or 0)
@@ -78,10 +95,14 @@ class OpenAILLMClient:
         }
 
 
-def build_llm_client() -> tuple[LLMClient, str]:
+def get_client() -> tuple[LLMClient, str]:
     provider = str(os.getenv("KRAKO_LLM_PROVIDER", "stub")).strip().lower()
     api_key = os.getenv("OPENAI_API_KEY")
     if provider == "openai" and api_key:
         return OpenAILLMClient(api_key=api_key), "openai"
     return StubLLMClient(), "stub"
 
+
+def build_llm_client() -> tuple[LLMClient, str]:
+    # Backward-compatible alias.
+    return get_client()

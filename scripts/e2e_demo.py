@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from krako2.autoscaling.controller import AutoscalingController, Metrics
 from krako2.autoscaling.metrics import compute_metrics_from_registry
 from krako2.billing.anomaly import check_billing_anomalies, write_anomaly_report
 from krako2.billing.consumer import BillingConsumer
+from krako2.billing.money import dec, quant6, serialize_decimal
 from krako2.billing.wallet import compute_wallet_snapshot
 from krako2.domain.models import WorkUnit
 from krako2.scheduler.node_registry import NodeRegistry
@@ -36,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kind", default="cpu")
     parser.add_argument("--simulated-ms", type=int, default=10)
     parser.add_argument("--tenant-id", default="tenant-a")
+    parser.add_argument("--llm-provider", default="stub")
     parser.add_argument("--llm-tokens", type=int, default=None)
     parser.add_argument("--priority", default="p2")
     parser.add_argument("--burst", type=int, default=1)
@@ -44,6 +47,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--multi-agent", action="store_true")
     parser.add_argument("--reset", action="store_true")
     return parser.parse_args()
+
+
+def _percentile(values: list[int], pct: float) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    rank = max(1, math.ceil((pct / 100.0) * len(ordered)))
+    idx = min(len(ordered) - 1, rank - 1)
+    return int(ordered[idx])
 
 
 def _reset_data(data_dir: Path, node_id: str) -> None:
@@ -131,6 +143,7 @@ def _has_demo_completion(event_log: EventLog, work_unit_id: str, node_id: str, e
 def run_demo(args: argparse.Namespace) -> dict[str, Any]:
     data_dir = Path(args.data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["KRAKO_LLM_PROVIDER"] = str(args.llm_provider)
     effective_node_id = args.node_id
     if args.kind == "llm_pod" and args.node_id == "node-1":
         effective_node_id = "pod-1"
@@ -349,6 +362,9 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
     completed_count = 0
     llm_invocations_completed_count = 0
     total_llm_tokens_reported = 0
+    llm_invocation_providers: set[str] = set()
+    llm_latencies_ms: list[int] = []
+    llm_estimated_cost_total = dec("0")
     for event in event_log.read_events():
         if event.type.value == "workunit.claimed":
             claim_count += 1
@@ -358,11 +374,29 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
             llm_invocations_completed_count += 1
             payload = event.payload if isinstance(event.payload, dict) else {}
             total_llm_tokens_reported += int(payload.get("total_tokens", 0))
+            provider = payload.get("provider")
+            if isinstance(provider, str) and provider:
+                llm_invocation_providers.add(provider)
+            try:
+                llm_latencies_ms.append(int(payload.get("latency_ms", 0)))
+            except Exception:
+                pass
+            try:
+                llm_estimated_cost_total += dec(str(payload.get("estimated_cost_usd", "0")))
+            except Exception:
+                pass
     claim_index_size = 0
     try:
         claim_index_size = len(load_index(data_dir / "claim_index.json").get("claims", {}))
     except ValueError:
         claim_index_size = 0
+
+    if len(llm_invocation_providers) == 1:
+        llm_provider_used = next(iter(llm_invocation_providers))
+    elif len(llm_invocation_providers) > 1:
+        llm_provider_used = "mixed"
+    else:
+        llm_provider_used = None
 
     summary = {
         "effective_node_id": effective_node_id,
@@ -397,6 +431,10 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
         "completed_count": completed_count,
         "llm_invocations_completed_count": llm_invocations_completed_count,
         "total_llm_tokens_reported": total_llm_tokens_reported,
+        "llm_provider_used": llm_provider_used,
+        "llm_latency_ms_p50": _percentile(llm_latencies_ms, 50),
+        "llm_latency_ms_p95": _percentile(llm_latencies_ms, 95),
+        "llm_estimated_cost_usd_total": serialize_decimal(quant6(llm_estimated_cost_total)),
         "billing": {"records_written": billed, "trust_updates": trust_updates},
         "billing_breakdown": {"cpu_rows": cpu_rows, "llm_rows": llm_rows},
         "ledger_llm_total_usd": ledger_llm_total,
