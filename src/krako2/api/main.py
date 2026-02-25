@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 from typing import Any
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
@@ -70,6 +72,15 @@ def submit_work_unit(work_unit: WorkUnit) -> dict[str, object]:
         "event_id": event.id,
         "event_created": created,
     }
+
+
+@app.get("/agent/state/{node_id}")
+def get_agent_state(node_id: str) -> dict[str, Any]:
+    state_path = Path("data") / f"agent_state_{node_id}.json"
+    if not state_path.exists():
+        return {"node_id": node_id, "state": None}
+    with state_path.open("r", encoding="utf-8") as f:
+        return {"node_id": node_id, "state": json.load(f)}
 
 
 def _parse_args() -> argparse.Namespace:

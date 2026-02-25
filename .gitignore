@@ -14,6 +14,7 @@
 /data/scheduler_state.json
 /data/retry_budget_state.json
 /data/congestion_state.json
+/data/agent_state_*.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

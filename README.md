@@ -75,6 +75,16 @@ This writes local runtime data under `./data` only:
 
 ---
 
+## Dev: Agent
+
+Run a minimal node agent loop for a registered node:
+
+```bash
+NODE_ID=node-1 python3 -m krako2.agent.runner
+```
+
+---
+
 ## Contributing
 
 Contributions are welcome. To contribute:
