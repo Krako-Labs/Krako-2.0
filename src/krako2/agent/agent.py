@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from krako2.agent.claim_index import is_claimed, record_claim, rebuild_from_event_log
 from krako2.billing.money import quant6, serialize_decimal
 from krako2.domain.models import EventType
 from krako2.storage.event_log import EventLog
@@ -23,6 +24,7 @@ class NodeAgent:
         poll_interval_ms: int = 500,
         event_log_path: str | Path | None = None,
         state_path: str | Path | None = None,
+        claim_index_path: str | Path | None = None,
         publisher: EventPublisher | None = None,
     ) -> None:
         self.node_id = node_id
@@ -30,10 +32,14 @@ class NodeAgent:
         self.poll_interval_ms = int(poll_interval_ms)
         self.event_log_path = Path(event_log_path) if event_log_path else self.data_dir / "events.jsonl"
         self.state_path = Path(state_path) if state_path else self.data_dir / f"agent_state_{node_id}.json"
+        self.claim_index_path = (
+            Path(claim_index_path) if claim_index_path else self.data_dir / "claim_index.json"
+        )
         self.region = os.getenv("NODE_REGION")
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.event_log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.claim_index_path.parent.mkdir(parents=True, exist_ok=True)
         self.event_log_path.touch(exist_ok=True)
 
         self.publisher = publisher or EventPublisher(EventLog(self.event_log_path))
@@ -140,7 +146,7 @@ class NodeAgent:
         state["available_concurrency"] = int(self.available_concurrency)
         self._atomic_write_state(state)
 
-    def _is_already_claimed(self, work_unit_id: str, dispatch_event_id: str) -> bool:
+    def _is_claimed_via_scan(self, work_unit_id: str, dispatch_event_id: str) -> bool:
         state = self._read_state()
         if dispatch_event_id in set(state.get("claimed_dispatch_event_ids", [])):
             return True
@@ -154,6 +160,31 @@ class NodeAgent:
             if payload.get("dispatch_event_id") != dispatch_event_id:
                 continue
             return True
+        return False
+
+    def _is_already_claimed(self, work_unit_id: str, dispatch_event_id: str) -> bool:
+        state = self._read_state()
+        if dispatch_event_id in set(state.get("claimed_dispatch_event_ids", [])):
+            return True
+
+        index_usable = True
+        if not self.claim_index_path.exists():
+            index_usable = False
+        else:
+            try:
+                if is_claimed(self.claim_index_path, work_unit_id, dispatch_event_id):
+                    return True
+                return False
+            except ValueError:
+                index_usable = False
+
+        if not index_usable:
+            try:
+                rebuild_from_event_log(self.claim_index_path, self.event_log_path)
+                return is_claimed(self.claim_index_path, work_unit_id, dispatch_event_id)
+            except Exception:
+                # Last-resort fallback when index cannot be rebuilt.
+                return self._is_claimed_via_scan(work_unit_id, dispatch_event_id)
         return False
 
     def _try_claim_dispatch(self, dispatch_event: dict[str, Any], payload: dict[str, Any]) -> bool:
@@ -170,7 +201,7 @@ class NodeAgent:
             "node_id": self.node_id,
             "dispatch_event_id": dispatch_event_id,
         }
-        _, created = self.publisher.emit(
+        claim_event, created = self.publisher.emit(
             EventType.WORKUNIT_CLAIMED,
             idempotency_key=f"claim:{work_unit_id}:{dispatch_event_id}:{self.node_id}",
             work_unit_id=work_unit_id,
@@ -178,6 +209,14 @@ class NodeAgent:
         )
         if created:
             self._mark_claimed_dispatch(dispatch_event_id)
+            record_claim(
+                self.claim_index_path,
+                work_unit_id,
+                dispatch_event_id,
+                self.node_id,
+                str(claim_event.id),
+                str(claim_event.created_at.isoformat()),
+            )
         return created
 
     def emit_heartbeat(self) -> bool:

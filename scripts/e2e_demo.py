@@ -13,6 +13,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from krako2.agent.agent import NodeAgent
+from krako2.agent.claim_index import load_index
 from krako2.autoscaling.controller import AutoscalingController, Metrics
 from krako2.autoscaling.metrics import compute_metrics_from_registry
 from krako2.billing.anomaly import check_billing_anomalies, write_anomaly_report
@@ -51,6 +52,7 @@ def _reset_data(data_dir: Path, node_id: str) -> None:
         data_dir / "billing_dedupe.json",
         data_dir / "wallet_snapshot.json",
         data_dir / "billing_anomalies.json",
+        data_dir / "claim_index.json",
         data_dir / "scheduler_state.json",
         data_dir / "congestion_state.json",
         data_dir / "retry_budget_state.json",
@@ -330,6 +332,11 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
             claim_count += 1
         if event.type.value == "workunit.completed":
             completed_count += 1
+    claim_index_size = 0
+    try:
+        claim_index_size = len(load_index(data_dir / "claim_index.json").get("claims", {}))
+    except ValueError:
+        claim_index_size = 0
 
     summary = {
         "effective_node_id": effective_node_id,
@@ -359,6 +366,8 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
             "available_concurrency": agent.available_concurrency,
         },
         "claim_count": claim_count,
+        "claimed_count": claim_count,
+        "claim_index_size": claim_index_size,
         "completed_count": completed_count,
         "billing": {"records_written": billed, "trust_updates": trust_updates},
         "wallet": {
