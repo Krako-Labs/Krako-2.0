@@ -17,7 +17,7 @@ app = FastAPI(title="Krako 2.0 API")
 _event_log = EventLog()
 _publisher = EventPublisher(_event_log)
 _node_registry = NodeRegistry()
-_scheduler = SchedulerService()
+_scheduler = SchedulerService(publisher=_publisher)
 
 
 class SubmitWorkUnitRequest(BaseModel):

@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from krako2.domain.models import EventType, WorkUnit
+from krako2.scheduler.circuit_breaker import CircuitBreakerManager
 from krako2.scheduler.node_registry import Node
+from krako2.scheduler.retry import compute_backoff_seconds, is_retryable_error, max_attempts
+from krako2.scheduler.retry_budget import RetryBudgetStore
 from krako2.telemetry.publisher import EventPublisher
 
 
@@ -30,7 +33,14 @@ def _version_gte(node_version: str, min_version: str) -> bool:
 
 
 class SchedulerService:
-    def __init__(self, state_path: str | Path = "data/scheduler_state.json") -> None:
+    def __init__(
+        self,
+        state_path: str | Path = "data/scheduler_state.json",
+        retry_budget_state_path: str | Path = "data/retry_budget_state.json",
+        congestion_state_path: str | Path = "data/congestion_state.json",
+        publisher: EventPublisher | None = None,
+        circuit_breaker: CircuitBreakerManager | None = None,
+    ) -> None:
         self.state_path = Path(state_path)
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.state_path.exists():
@@ -41,6 +51,15 @@ class SchedulerService:
                     "scheduling_epoch": 0,
                 }
             )
+
+        self.retry_budget = RetryBudgetStore(state_path=retry_budget_state_path)
+        self.congestion_state_path = Path(congestion_state_path)
+        self.congestion_state_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.congestion_state_path.exists():
+            self._atomic_write_congestion({"mode": "NORMAL"})
+
+        self.publisher = publisher
+        self.circuit_breaker = circuit_breaker or CircuitBreakerManager()
 
     def _read_state(self) -> dict[str, Any]:
         with self.state_path.open("r", encoding="utf-8") as f:
@@ -54,6 +73,19 @@ class SchedulerService:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, self.state_path)
+
+    def _read_congestion(self) -> dict[str, Any]:
+        with self.congestion_state_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def _atomic_write_congestion(self, data: dict[str, Any]) -> None:
+        tmp_path = self.congestion_state_path.with_suffix(self.congestion_state_path.suffix + ".tmp")
+        with tmp_path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, sort_keys=True, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, self.congestion_state_path)
 
     def _next_scheduling_epoch(self) -> int:
         state = self._read_state()
@@ -98,6 +130,28 @@ class SchedulerService:
 
         score = 0.35 * c + 0.30 * l + 0.25 * t + 0.10 * r
         return score, {"C": c, "L": l, "T": t, "R": r}
+
+    def detect_congestion_mode(self, nodes: list[Node], publisher: EventPublisher | None = None) -> str:
+        enabled = [n for n in nodes if n.enabled]
+        avg_q = 0.0
+        if enabled:
+            avg_q = sum(n.active_queue_depth for n in enabled) / len(enabled)
+        new_mode = "HIGH" if avg_q > 800 else "NORMAL"
+
+        state = self._read_congestion()
+        prev_mode = state.get("mode", "NORMAL")
+        if prev_mode != new_mode:
+            state["mode"] = new_mode
+            self._atomic_write_congestion(state)
+
+            emitter = publisher or self.publisher
+            if emitter is not None:
+                emitter.emit(
+                    EventType.CONGESTION_MODE_CHANGED,
+                    idempotency_key=f"congestion:{new_mode}:{self._next_scheduling_epoch()}",
+                    payload={"previous_mode": prev_mode, "mode": new_mode, "avg_active_queue_depth": avg_q},
+                )
+        return new_mode
 
     def select_node_for_workunit(self, work_unit: WorkUnit, nodes: list[Node]) -> tuple[str | None, dict[str, Any]]:
         required = max(1, int(work_unit.required_concurrency or 1))
@@ -146,7 +200,6 @@ class SchedulerService:
             key=lambda item: (-item["score"], item["node"].active_queue_depth, item["node"].node_id),
         )
 
-        # Enforce deterministic tie-break for near-equal scores (<=1e-9).
         best_score = ranked[0]["score"]
         near_best = [item for item in ranked if abs(item["score"] - best_score) <= 1e-9]
         if len(near_best) > 1:
@@ -225,3 +278,60 @@ class SchedulerService:
         debug["dispatch_event_id"] = event.id
         debug["dispatch_event_created"] = created
         return selected_node_id, debug
+
+    def schedule_retry(
+        self,
+        work_unit: WorkUnit,
+        tenant_id: str,
+        error_code: str,
+        attempt_index: int,
+        congestion_mode: str,
+    ) -> dict[str, Any]:
+        priority = str((work_unit.payload or {}).get("priority", "p2"))
+        cap = max_attempts(congestion_mode, priority)
+        reason = "scheduled"
+
+        if not is_retryable_error(error_code):
+            reason = "non_retryable_error"
+            event_type = EventType.WORKUNIT_RETRY_DROPPED
+            delay = 0.0
+        elif attempt_index > cap:
+            reason = "attempt_cap_exceeded"
+            event_type = EventType.WORKUNIT_RETRY_DROPPED
+            delay = 0.0
+        elif not self.retry_budget.allow_retry(tenant_id):
+            reason = "retry_budget_exhausted"
+            event_type = EventType.WORKUNIT_RETRY_DROPPED
+            delay = 0.0
+        else:
+            delay = compute_backoff_seconds(work_unit.id, attempt_index)
+            event_type = EventType.WORKUNIT_RETRY_SCHEDULED
+
+        payload = {
+            "work_unit_id": work_unit.id,
+            "attempt_index": attempt_index,
+            "delay_seconds": delay,
+            "reason": reason,
+            "tenant_id": tenant_id,
+            "congestion_mode": congestion_mode,
+            "error_code": error_code,
+        }
+
+        emitted = False
+        if self.publisher is not None:
+            self.publisher.emit(
+                event_type,
+                idempotency_key=f"retry:{work_unit.id}:{attempt_index}:{reason}",
+                work_unit_id=work_unit.id,
+                payload=payload,
+            )
+            emitted = True
+
+        return {
+            "event_type": event_type.value,
+            "scheduled": event_type == EventType.WORKUNIT_RETRY_SCHEDULED,
+            "delay_seconds": delay,
+            "reason": reason,
+            "attempt_cap": cap,
+            "emitted": emitted,
+        }

@@ -9,7 +9,11 @@ from krako2.scheduler.service import SchedulerService
 
 
 def _service(tmp_path: Path) -> SchedulerService:
-    return SchedulerService(state_path=tmp_path / "scheduler_state.json")
+    return SchedulerService(
+        state_path=tmp_path / "scheduler_state.json",
+        retry_budget_state_path=tmp_path / "retry_budget_state.json",
+        congestion_state_path=tmp_path / "congestion_state.json",
+    )
 
 
 def test_hard_filter_excludes_unsupported_kind(tmp_path: Path) -> None:
@@ -87,7 +91,11 @@ def test_soft_anti_affinity_switches_when_within_threshold(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    service = SchedulerService(state_path=state_path)
+    service = SchedulerService(
+        state_path=state_path,
+        retry_budget_state_path=tmp_path / "retry_budget_state.json",
+        congestion_state_path=tmp_path / "congestion_state.json",
+    )
     work_unit = WorkUnit(kind="cpu", required_concurrency=1)
     nodes = [
         Node(

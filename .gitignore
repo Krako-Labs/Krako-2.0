@@ -12,6 +12,8 @@
 /data/billing_anomalies.json
 /data/node_registry.json
 /data/scheduler_state.json
+/data/retry_budget_state.json
+/data/congestion_state.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -21,6 +21,9 @@ class WorkUnit(BaseModel):
 class EventType(str, Enum):
     WORKUNIT_SUBMITTED = "workunit.submitted"
     WORKUNIT_SCHEDULED = "workunit.scheduled"
+    WORKUNIT_RETRY_SCHEDULED = "workunit.retry.scheduled"
+    WORKUNIT_RETRY_DROPPED = "workunit.retry.dropped"
+    CONGESTION_MODE_CHANGED = "congestion.mode.changed"
     BILLING_CONSUMED = "billing.consumed"
     TRUST_CONSUMED = "trust.consumed"
 
