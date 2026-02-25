@@ -6,12 +6,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from krako2.domain.models import Event
+from krako2.scheduler.node_registry import NodeRegistry
 
 
 class TrustConsumer:
-    def __init__(self, state_path: str | Path = "data/trust_state.json") -> None:
+    def __init__(
+        self,
+        state_path: str | Path = "data/trust_state.json",
+        registry_path: str | Path = "data/node_registry.json",
+    ) -> None:
         self.state_path = Path(state_path)
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.node_registry = NodeRegistry(registry_path=registry_path)
         if not self.state_path.exists():
             self._write_state({"processed_event_ids": [], "work_units": {}, "nodes": {}})
 
@@ -42,6 +48,7 @@ class TrustConsumer:
             payload = event.payload or {}
             node_id = payload.get("node_id")
             if isinstance(node_id, str) and node_id:
+                self.node_registry.apply_heartbeat(payload)
                 nodes = state.setdefault("nodes", {})
                 node_state = dict(nodes.get(node_id, {}))
                 prev_score = float(node_state.get("score", 0.5))

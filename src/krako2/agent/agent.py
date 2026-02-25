@@ -30,6 +30,7 @@ class NodeAgent:
         self.poll_interval_ms = int(poll_interval_ms)
         self.event_log_path = Path(event_log_path) if event_log_path else self.data_dir / "events.jsonl"
         self.state_path = Path(state_path) if state_path else self.data_dir / f"agent_state_{node_id}.json"
+        self.region = os.getenv("NODE_REGION")
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.event_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -101,6 +102,8 @@ class NodeAgent:
             "health_status": "healthy",
             "active_queue_depth": 0,
             "utilization": 0.2,
+            "available_concurrency": 4,
+            "region": self.region,
             "trust_score_hint": 0.5,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }

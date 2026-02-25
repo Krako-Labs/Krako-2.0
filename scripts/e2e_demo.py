@@ -163,7 +163,7 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
         publisher=publisher,
     )
     autoscaling = AutoscalingController(state_path=data_dir / "capacity_state.json", publisher=publisher)
-    trust = TrustConsumer(data_dir / "trust_state.json")
+    trust = TrustConsumer(state_path=data_dir / "trust_state.json", registry_path=data_dir / "node_registry.json")
     seen_event_ids: set[str] = set()
 
     def consume_new_events_for_trust() -> int:
@@ -260,6 +260,14 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
         "effective_node_id": effective_node_id,
         "capacity_state": autoscaling.load_state(),
         "autoscaling_events_emitted": autoscaling_events_emitted,
+        "node_registry_snapshot": {
+            n.node_id: {
+                "active_queue_depth": n.active_queue_depth,
+                "utilization": n.utilization,
+                "last_heartbeat_ts": n.last_heartbeat_ts,
+            }
+            for n in NodeRegistry(registry_path=data_dir / "node_registry.json").list_nodes()
+        },
         "scheduled": scheduled,
         "admission_result": admission_result if "admission_result" in locals() else {"status": scheduled["status"]},
         "agent": agent_stats,

@@ -66,6 +66,52 @@ class NodeRegistry:
         data["nodes"] = nodes
         self._atomic_write(data)
 
+    def apply_heartbeat(self, payload: dict[str, Any]) -> None:
+        node_id = payload.get("node_id")
+        if not isinstance(node_id, str) or not node_id:
+            return
+
+        data = self._read()
+        nodes = data.get("nodes", [])
+
+        hb_fields = {
+            "health_status": str(payload.get("health_status", "healthy")),
+            "active_queue_depth": int(payload.get("active_queue_depth", 0)),
+            "utilization": float(payload.get("utilization", 0.0)),
+            "available_concurrency": int(payload.get("available_concurrency", 4)),
+            "last_heartbeat_ts": str(payload.get("timestamp", datetime.now(timezone.utc).isoformat())),
+        }
+        region = payload.get("region")
+        if region is not None:
+            hb_fields["region"] = str(region)
+
+        updated = False
+        for i, raw_node in enumerate(nodes):
+            if raw_node.get("node_id") == node_id:
+                merged = {**raw_node, **hb_fields}
+                nodes[i] = Node.model_validate(merged).model_dump(mode="json")
+                updated = True
+                break
+
+        if not updated:
+            created = {
+                "node_id": node_id,
+                "enabled": True,
+                "health_status": hb_fields["health_status"],
+                "supported_kinds": ["cpu"],
+                "available_concurrency": hb_fields["available_concurrency"],
+                "active_queue_depth": hb_fields["active_queue_depth"],
+                "utilization": hb_fields["utilization"],
+                "trust_score": 0.5,
+                "region": hb_fields.get("region"),
+                "version": "0.1.0",
+                "last_heartbeat_ts": hb_fields["last_heartbeat_ts"],
+            }
+            nodes.append(Node.model_validate(created).model_dump(mode="json"))
+
+        data["nodes"] = nodes
+        self._atomic_write(data)
+
 
 def list_nodes() -> list[Node]:
     return NodeRegistry().list_nodes()
