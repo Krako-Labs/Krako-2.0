@@ -14,6 +14,7 @@ if str(SRC) not in sys.path:
 
 from krako2.agent.agent import NodeAgent
 from krako2.autoscaling.controller import AutoscalingController, Metrics
+from krako2.autoscaling.metrics import compute_metrics_from_registry
 from krako2.billing.anomaly import check_billing_anomalies, write_anomaly_report
 from krako2.billing.consumer import BillingConsumer
 from krako2.billing.wallet import compute_wallet_snapshot
@@ -37,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--priority", default="p2")
     parser.add_argument("--burst", type=int, default=1)
     parser.add_argument("--polls", type=int, default=3)
-    parser.add_argument("--simulate-pressure", choices=["none", "low", "high", "critical"], default="none")
+    parser.add_argument("--simulate-pressure", choices=["none", "low", "high", "critical", "auto"], default="none")
     parser.add_argument("--reset", action="store_true")
     return parser.parse_args()
 
@@ -181,11 +182,12 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
     agent = NodeAgent(node_id=effective_node_id, data_dir=data_dir)
     trust_updates = 0
     autoscaling_events_emitted = 0
+    autoscaling_last_metrics = {"queue_depth": 0, "w95_wait_s": 0.0, "utilization": 0.0}
     # Ensure heartbeat exists before scheduling so trust can influence scheduling score.
     agent.emit_heartbeat()
     trust_updates += consume_new_events_for_trust()
 
-    if args.simulate_pressure != "none":
+    if args.simulate_pressure in {"low", "high", "critical"}:
         pressure_map = {
             "low": Metrics(queue_depth=10, w95_wait_s=0.2, utilization=0.2),
             "high": Metrics(queue_depth=300, w95_wait_s=2.5, utilization=0.85),
@@ -196,6 +198,11 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
         for _ in range(windows):
             out = autoscaling.evaluate(m)
             autoscaling_events_emitted += int(out["events_emitted"])
+            autoscaling_last_metrics = {
+                "queue_depth": m.queue_depth,
+                "w95_wait_s": m.w95_wait_s,
+                "utilization": m.utilization,
+            }
 
     scheduled_items: list[dict[str, Any]] = []
     admission_items: list[dict[str, Any]] = []
@@ -240,11 +247,45 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
         scheduled_items.append(scheduled)
         admission_items.append(admission)
 
+    pending_windows_by_node: dict[str, int] = {}
+    for s in scheduled_items:
+        node = s.get("selected_node_id")
+        if s.get("status") == "scheduled" and isinstance(node, str):
+            pending_windows_by_node[node] = pending_windows_by_node.get(node, 0) + 1
+
     agent_stats = {"processed": 0, "skipped": 0}
     for _ in range(max(1, int(args.polls))):
+        if args.simulate_pressure == "auto":
+            registry = NodeRegistry(registry_path=data_dir / "node_registry.json")
+            for node_id, pending_windows in pending_windows_by_node.items():
+                util = 0.0
+                if pending_windows > 0:
+                    util = min(1.0, 0.81 + 0.02 * max(0, pending_windows - 1))
+                registry.update_node(
+                    node_id,
+                    {
+                        "active_queue_depth": max(0, pending_windows),
+                        "utilization": util,
+                    },
+                )
+
         out = agent.poll_once()
         agent_stats["processed"] += out["processed"]
         agent_stats["skipped"] += out["skipped"]
+
+        if args.simulate_pressure == "auto":
+            nodes_live = NodeRegistry(registry_path=data_dir / "node_registry.json").list_nodes()
+            metrics = compute_metrics_from_registry(nodes_live)
+            auto_out = autoscaling.evaluate(metrics)
+            autoscaling_events_emitted += int(auto_out["events_emitted"])
+            autoscaling_last_metrics = {
+                "queue_depth": metrics.queue_depth,
+                "w95_wait_s": metrics.w95_wait_s,
+                "utilization": metrics.utilization,
+            }
+            for node_id in list(pending_windows_by_node.keys()):
+                pending_windows_by_node[node_id] = max(0, pending_windows_by_node[node_id] - 1)
+
         trust_updates += consume_new_events_for_trust()
 
     # Replay billing + trust over append-only events.
@@ -272,6 +313,11 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
         "effective_node_id": effective_node_id,
         "capacity_state": autoscaling.load_state(),
         "autoscaling_events_emitted": autoscaling_events_emitted,
+        "autoscaling": {
+            "capacity_state": autoscaling.load_state(),
+            "events_emitted_total": autoscaling_events_emitted,
+            "last_metrics": autoscaling_last_metrics,
+        },
         "node_registry_snapshot": {
             n.node_id: {
                 "active_queue_depth": n.active_queue_depth,

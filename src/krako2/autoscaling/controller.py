@@ -32,14 +32,15 @@ class AutoscalingController:
         self.publisher = publisher
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.state_path.exists():
+            now = time.time()
             self.save_state_atomic(
                 {
                     "mode": "OPEN",
                     "R": 1,
                     "K": 4,
-                    "updated_at": time.time(),
+                    "updated_at": now,
                     "last_scale_up_ts": 0.0,
-                    "last_scale_down_ts": 0.0,
+                    "last_scale_down_ts": now,
                     "up_count": 0,
                     "down_count": 0,
                     "critical_count": 0,
