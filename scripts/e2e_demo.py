@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--simulated-ms", type=int, default=10)
     parser.add_argument("--tenant-id", default="tenant-a")
     parser.add_argument("--llm-tokens", type=int, default=None)
+    parser.add_argument("--priority", default="p2")
     parser.add_argument("--polls", type=int, default=3)
     parser.add_argument("--simulate-pressure", choices=["none", "low", "high", "critical"], default="none")
     parser.add_argument("--reset", action="store_true")
@@ -158,6 +159,7 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
         retry_budget_state_path=data_dir / "retry_budget_state.json",
         congestion_state_path=data_dir / "congestion_state.json",
         trust_state_path=data_dir / "trust_state.json",
+        capacity_state_path=data_dir / "capacity_state.json",
         publisher=publisher,
     )
     autoscaling = AutoscalingController(state_path=data_dir / "capacity_state.json", publisher=publisher)
@@ -206,6 +208,7 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
             "simulated_ms": args.simulated_ms,
             "llm_tokens": llm_tokens,
             "attempt_index": 1,
+            "priority": args.priority,
         },
     )
 
@@ -223,6 +226,7 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
             "dispatch_event_id": debug.get("dispatch_event_id"),
             "status": "scheduled" if selected_node_id else "not_scheduled",
         }
+        admission_result = {"status": scheduled["status"], "reason_code": debug.get("reason_code")}
 
     agent_stats = {"processed": 0, "skipped": 0}
     for _ in range(max(1, int(args.polls))):
@@ -257,6 +261,7 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
         "capacity_state": autoscaling.load_state(),
         "autoscaling_events_emitted": autoscaling_events_emitted,
         "scheduled": scheduled,
+        "admission_result": admission_result if "admission_result" in locals() else {"status": scheduled["status"]},
         "agent": agent_stats,
         "billing": {"records_written": billed, "trust_updates": trust_updates},
         "wallet": {

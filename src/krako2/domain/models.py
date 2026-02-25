@@ -24,6 +24,8 @@ class EventType(str, Enum):
     CAPACITY_SCALE_REQUESTED = "capacity.scale.requested"
     CAPACITY_ADMISSION_MODE_CHANGED = "capacity.admission.mode.changed"
     WORKUNIT_SUBMITTED = "workunit.submitted"
+    WORKUNIT_SCHEDULING_DEFERRED = "workunit.scheduling.deferred"
+    WORKUNIT_REJECTED = "workunit.rejected"
     WORKUNIT_SCHEDULED = "workunit.scheduled"
     WORKUNIT_COMPLETED = "workunit.completed"
     WORKUNIT_FAILED = "workunit.failed"

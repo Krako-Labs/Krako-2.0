@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from krako2.domain.models import EventType, WorkUnit
+from krako2.autoscaling.state import load_capacity_mode
 from krako2.scheduler.circuit_breaker import CircuitBreakerManager
 from krako2.scheduler.node_registry import Node
 from krako2.scheduler.retry import compute_backoff_seconds, is_retryable_error, max_attempts
@@ -40,6 +41,7 @@ class SchedulerService:
         retry_budget_state_path: str | Path = "data/retry_budget_state.json",
         congestion_state_path: str | Path = "data/congestion_state.json",
         trust_state_path: str | Path = "data/trust_state.json",
+        capacity_state_path: str | Path = "data/capacity_state.json",
         publisher: EventPublisher | None = None,
         circuit_breaker: CircuitBreakerManager | None = None,
     ) -> None:
@@ -63,6 +65,7 @@ class SchedulerService:
         self.publisher = publisher
         self.circuit_breaker = circuit_breaker or CircuitBreakerManager()
         self.trust_state_path = Path(trust_state_path)
+        self.capacity_state_path = Path(capacity_state_path)
 
     def _read_state(self) -> dict[str, Any]:
         with self.state_path.open("r", encoding="utf-8") as f:
@@ -283,6 +286,45 @@ class SchedulerService:
         selected_node_id, debug = self.select_node_for_workunit(work_unit, nodes)
         epoch = self._next_scheduling_epoch()
         debug["scheduling_epoch"] = epoch
+        mode = load_capacity_mode(self.capacity_state_path)
+        priority = str((work_unit.payload or {}).get("priority", "p2")).lower()
+        debug["capacity_mode"] = mode
+        debug["priority"] = priority
+
+        critical_allowed = {"p0", "p1", "critical"}
+        if mode == "THROTTLED" and priority not in critical_allowed:
+            payload = {
+                "work_unit_id": work_unit.id,
+                "execution_session_id": work_unit.execution_session_id,
+                "mode": mode,
+                "priority": priority,
+                "reason": "throttled",
+            }
+            publisher.emit(
+                EventType.WORKUNIT_SCHEDULING_DEFERRED,
+                idempotency_key=f"admission:defer:{work_unit.id}:{epoch}",
+                work_unit_id=work_unit.id,
+                payload=payload,
+            )
+            debug["reason_code"] = "admission_throttled"
+            return None, debug
+
+        if mode == "CRITICAL" and priority not in critical_allowed:
+            payload = {
+                "work_unit_id": work_unit.id,
+                "execution_session_id": work_unit.execution_session_id,
+                "mode": mode,
+                "priority": priority,
+                "reason": "critical_mode",
+            }
+            publisher.emit(
+                EventType.WORKUNIT_REJECTED,
+                idempotency_key=f"admission:reject:{work_unit.id}:{epoch}",
+                work_unit_id=work_unit.id,
+                payload=payload,
+            )
+            debug["reason_code"] = "admission_rejected"
+            return None, debug
 
         if selected_node_id is None:
             return None, debug

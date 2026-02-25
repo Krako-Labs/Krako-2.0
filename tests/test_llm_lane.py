@@ -16,6 +16,7 @@ def _service(tmp_path: Path) -> SchedulerService:
         retry_budget_state_path=tmp_path / "retry_budget_state.json",
         congestion_state_path=tmp_path / "congestion_state.json",
         trust_state_path=tmp_path / "trust_state.json",
+        capacity_state_path=tmp_path / "capacity_state.json",
     )
 
 
