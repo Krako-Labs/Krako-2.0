@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import os
 import time
-from decimal import Decimal
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -38,8 +38,25 @@ class NodeAgent:
 
         self.publisher = publisher or EventPublisher(EventLog(self.event_log_path))
 
+        default_state = {
+            "last_offset_bytes": 0,
+            "processed_event_ids": [],
+            "active_queue_depth": 0,
+            "utilization": 0.2,
+            "available_concurrency": 4,
+        }
         if not self.state_path.exists():
-            self._atomic_write_state({"last_offset_bytes": 0, "processed_event_ids": []})
+            self._atomic_write_state(default_state)
+
+        state = self._read_state()
+        self.active_queue_depth = int(state.get("active_queue_depth", 0))
+        self.utilization = float(state.get("utilization", 0.2))
+        self.available_concurrency = int(state.get("available_concurrency", 4))
+        self._last_heartbeat_epoch_ms = 0
+
+    @staticmethod
+    def _clamp(value: float, lo: float, hi: float) -> float:
+        return max(lo, min(hi, value))
 
     def _read_state(self) -> dict[str, Any]:
         with self.state_path.open("r", encoding="utf-8") as f:
@@ -53,6 +70,13 @@ class NodeAgent:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, self.state_path)
+
+    def _persist_metrics(self) -> None:
+        state = self._read_state()
+        state["active_queue_depth"] = int(self.active_queue_depth)
+        state["utilization"] = float(self.utilization)
+        state["available_concurrency"] = int(self.available_concurrency)
+        self._atomic_write_state(state)
 
     def _tail_new_events(self) -> list[dict[str, Any]]:
         state = self._read_state()
@@ -77,6 +101,9 @@ class NodeAgent:
             new_offset = f.tell()
 
         state["last_offset_bytes"] = new_offset
+        state["active_queue_depth"] = int(self.active_queue_depth)
+        state["utilization"] = float(self.utilization)
+        state["available_concurrency"] = int(self.available_concurrency)
         self._atomic_write_state(state)
         return rows
 
@@ -93,16 +120,23 @@ class NodeAgent:
         if len(ids) > 2000:
             ids = ids[-2000:]
         state["processed_event_ids"] = ids
+        state["active_queue_depth"] = int(self.active_queue_depth)
+        state["utilization"] = float(self.utilization)
+        state["available_concurrency"] = int(self.available_concurrency)
         self._atomic_write_state(state)
 
     def emit_heartbeat(self) -> bool:
         epoch_ms = int(time.time() * 1000)
+        if epoch_ms <= self._last_heartbeat_epoch_ms:
+            epoch_ms = self._last_heartbeat_epoch_ms + 1
+        self._last_heartbeat_epoch_ms = epoch_ms
+
         payload = {
             "node_id": self.node_id,
             "health_status": "healthy",
-            "active_queue_depth": 0,
-            "utilization": 0.2,
-            "available_concurrency": 4,
+            "active_queue_depth": int(self.active_queue_depth),
+            "utilization": float(self.utilization),
+            "available_concurrency": int(self.available_concurrency),
             "region": self.region,
             "trust_score_hint": 0.5,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -179,6 +213,11 @@ class NodeAgent:
                 skipped += 1
                 continue
 
+            self.active_queue_depth += 1
+            self.utilization = self._clamp(self.utilization + 0.15, 0.0, 1.0)
+            self._persist_metrics()
+            self.emit_heartbeat()
+
             try:
                 simulated_ms = int(payload.get("simulated_ms", 50))
                 time.sleep(max(0, simulated_ms) / 1000.0)
@@ -186,6 +225,10 @@ class NodeAgent:
             except Exception as exc:  # pragma: no cover - guarded by tests through normal path
                 self._emit_failed(event, payload, str(exc))
             finally:
+                self.active_queue_depth = max(0, self.active_queue_depth - 1)
+                self.utilization = self._clamp(self.utilization - 0.15, 0.0, 1.0)
+                self._persist_metrics()
+                self.emit_heartbeat()
                 self._mark_processed(event_id)
                 processed += 1
 

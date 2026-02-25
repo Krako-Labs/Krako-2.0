@@ -35,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tenant-id", default="tenant-a")
     parser.add_argument("--llm-tokens", type=int, default=None)
     parser.add_argument("--priority", default="p2")
+    parser.add_argument("--burst", type=int, default=1)
     parser.add_argument("--polls", type=int, default=3)
     parser.add_argument("--simulate-pressure", choices=["none", "low", "high", "critical"], default="none")
     parser.add_argument("--reset", action="store_true")
@@ -129,6 +130,7 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
     if args.kind == "llm_pod" and args.node_id == "node-1":
         effective_node_id = "pod-1"
     llm_tokens = args.llm_tokens if args.llm_tokens is not None else (1200 if args.kind == "llm_pod" else 0)
+    burst = max(1, int(args.burst))
 
     if args.reset:
         _reset_data(data_dir, effective_node_id)
@@ -195,38 +197,48 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
             out = autoscaling.evaluate(m)
             autoscaling_events_emitted += int(out["events_emitted"])
 
-    work_unit = WorkUnit(
-        id="demo-1-workunit",
-        execution_session_id="demo-1",
-        kind=args.kind,
-        region=args.region,
-        required_concurrency=1,
-        payload={
-            "tenant_id": args.tenant_id,
-            "correlation_id": "sess:demo-1",
-            "execution_session_id": "demo-1",
-            "simulated_ms": args.simulated_ms,
-            "llm_tokens": llm_tokens,
-            "attempt_index": 1,
-            "priority": args.priority,
-        },
-    )
+    scheduled_items: list[dict[str, Any]] = []
+    admission_items: list[dict[str, Any]] = []
+    for i in range(1, burst + 1):
+        execution_session_id = f"demo-{i}"
+        work_unit = WorkUnit(
+            id=f"demo-{i}-workunit",
+            execution_session_id=execution_session_id,
+            kind=args.kind,
+            region=args.region,
+            required_concurrency=1,
+            payload={
+                "tenant_id": args.tenant_id,
+                "correlation_id": f"sess:{execution_session_id}",
+                "execution_session_id": execution_session_id,
+                "simulated_ms": args.simulated_ms,
+                "llm_tokens": llm_tokens,
+                "attempt_index": 1,
+                "priority": args.priority,
+            },
+        )
 
-    nodes = NodeRegistry(registry_path=data_dir / "node_registry.json").list_nodes()
-    if _has_demo_completion(event_log, work_unit.id, effective_node_id, "demo-1"):
-        scheduled = {
-            "selected_node_id": effective_node_id,
-            "dispatch_event_id": None,
-            "status": "already_completed",
-        }
-    else:
-        selected_node_id, debug = scheduler.schedule_and_emit(work_unit, nodes, publisher)
-        scheduled = {
-            "selected_node_id": selected_node_id,
-            "dispatch_event_id": debug.get("dispatch_event_id"),
-            "status": "scheduled" if selected_node_id else "not_scheduled",
-        }
-        admission_result = {"status": scheduled["status"], "reason_code": debug.get("reason_code")}
+        nodes = NodeRegistry(registry_path=data_dir / "node_registry.json").list_nodes()
+        if _has_demo_completion(event_log, work_unit.id, effective_node_id, execution_session_id):
+            scheduled = {
+                "work_unit_id": work_unit.id,
+                "selected_node_id": effective_node_id,
+                "dispatch_event_id": None,
+                "status": "already_completed",
+            }
+            admission = {"status": "already_completed", "reason_code": None}
+        else:
+            selected_node_id, debug = scheduler.schedule_and_emit(work_unit, nodes, publisher)
+            scheduled = {
+                "work_unit_id": work_unit.id,
+                "selected_node_id": selected_node_id,
+                "dispatch_event_id": debug.get("dispatch_event_id"),
+                "status": "scheduled" if selected_node_id else "not_scheduled",
+            }
+            admission = {"status": scheduled["status"], "reason_code": debug.get("reason_code")}
+
+        scheduled_items.append(scheduled)
+        admission_items.append(admission)
 
     agent_stats = {"processed": 0, "skipped": 0}
     for _ in range(max(1, int(args.polls))):
@@ -268,9 +280,16 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
             }
             for n in NodeRegistry(registry_path=data_dir / "node_registry.json").list_nodes()
         },
-        "scheduled": scheduled,
-        "admission_result": admission_result if "admission_result" in locals() else {"status": scheduled["status"]},
+        "scheduled": scheduled_items[0],
+        "scheduled_batch": scheduled_items,
+        "admission_result": admission_items[0],
+        "admission_results": admission_items,
         "agent": agent_stats,
+        "agent_metrics_final": {
+            "active_queue_depth": agent.active_queue_depth,
+            "utilization": agent.utilization,
+            "available_concurrency": agent.available_concurrency,
+        },
         "billing": {"records_written": billed, "trust_updates": trust_updates},
         "wallet": {
             "grand_total_debit_usd": wallet["grand_total_debit_usd"],
@@ -279,6 +298,7 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
         },
         "anomalies": anomalies["summary"],
     }
+    summary["registry_snapshot_after"] = summary["node_registry_snapshot"]
     return summary
 
 
