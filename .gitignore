@@ -15,6 +15,7 @@
 /data/retry_budget_state.json
 /data/congestion_state.json
 /data/agent_state_*.json
+/data/capacity_state.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

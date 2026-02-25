@@ -13,6 +13,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from krako2.agent.agent import NodeAgent
+from krako2.autoscaling.controller import AutoscalingController, Metrics
 from krako2.billing.anomaly import check_billing_anomalies, write_anomaly_report
 from krako2.billing.consumer import BillingConsumer
 from krako2.billing.wallet import compute_wallet_snapshot
@@ -34,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tenant-id", default="tenant-a")
     parser.add_argument("--llm-tokens", type=int, default=None)
     parser.add_argument("--polls", type=int, default=3)
+    parser.add_argument("--simulate-pressure", choices=["none", "low", "high", "critical"], default="none")
     parser.add_argument("--reset", action="store_true")
     return parser.parse_args()
 
@@ -48,6 +50,7 @@ def _reset_data(data_dir: Path, node_id: str) -> None:
         data_dir / "scheduler_state.json",
         data_dir / "congestion_state.json",
         data_dir / "retry_budget_state.json",
+        data_dir / "capacity_state.json",
         data_dir / f"agent_state_{node_id}.json",
         data_dir / "node_registry.json",
     ]
@@ -157,6 +160,7 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
         trust_state_path=data_dir / "trust_state.json",
         publisher=publisher,
     )
+    autoscaling = AutoscalingController(state_path=data_dir / "capacity_state.json", publisher=publisher)
     trust = TrustConsumer(data_dir / "trust_state.json")
     seen_event_ids: set[str] = set()
 
@@ -172,9 +176,22 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
 
     agent = NodeAgent(node_id=effective_node_id, data_dir=data_dir)
     trust_updates = 0
+    autoscaling_events_emitted = 0
     # Ensure heartbeat exists before scheduling so trust can influence scheduling score.
     agent.emit_heartbeat()
     trust_updates += consume_new_events_for_trust()
+
+    if args.simulate_pressure != "none":
+        pressure_map = {
+            "low": Metrics(queue_depth=10, w95_wait_s=0.2, utilization=0.2),
+            "high": Metrics(queue_depth=300, w95_wait_s=2.5, utilization=0.85),
+            "critical": Metrics(queue_depth=1000, w95_wait_s=5.0, utilization=0.95),
+        }
+        windows = 3 if args.simulate_pressure in {"high", "critical"} else 1
+        m = pressure_map[args.simulate_pressure]
+        for _ in range(windows):
+            out = autoscaling.evaluate(m)
+            autoscaling_events_emitted += int(out["events_emitted"])
 
     work_unit = WorkUnit(
         id="demo-1-workunit",
@@ -237,6 +254,8 @@ def run_demo(args: argparse.Namespace) -> dict[str, Any]:
 
     summary = {
         "effective_node_id": effective_node_id,
+        "capacity_state": autoscaling.load_state(),
+        "autoscaling_events_emitted": autoscaling_events_emitted,
         "scheduled": scheduled,
         "agent": agent_stats,
         "billing": {"records_written": billed, "trust_updates": trust_updates},
